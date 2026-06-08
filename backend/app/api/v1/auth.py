@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_redis
@@ -12,7 +14,7 @@ from app.schemas.user import (
     UserCreate,
     UserResponse,
 )
-from app.services.auth_service import create_user, get_user_by_email
+from app.services.auth_service import create_user, get_user_by_email, get_user_by_id
 
 router = APIRouter()
 
@@ -49,20 +51,15 @@ async def login(
     db: AsyncSession = Depends(get_db),
 ):
     """Authenticate user and return tokens."""
+    # Bug 6 fix: use a single generic error to avoid leaking whether email exists
     user = await get_user_by_email(db, user_data.email)
-
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User with this email not found",
-        )
 
     from app.core.security import verify_password
 
-    if not verify_password(user_data.password, user.hashed_password):
+    if not user or not verify_password(user_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect password",
+            detail="Invalid credentials",
         )
 
     access_token = create_access_token(data={"sub": str(user.id)})
@@ -90,6 +87,30 @@ async def refresh_token(
         )
 
     user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload",
+        )
+
+    # Bug 10 fix: verify user still exists in DB before issuing new tokens
+    import uuid
+
+    try:
+        user_uuid = uuid.UUID(user_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid user ID in token",
+        )
+
+    user = await get_user_by_id(db, user_uuid)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User no longer exists",
+        )
+
     access_token = create_access_token(data={"sub": user_id})
     refresh_token = create_refresh_token(data={"sub": user_id})
 
@@ -101,9 +122,25 @@ async def refresh_token(
 
 @router.post("/logout")
 async def logout(
+    request: Request,
     current_user: User = Depends(get_current_user),
+    redis: RedisClient = Depends(get_redis),
 ):
-    """Logout user."""
+    """Logout user by blacklisting the current access token's JTI."""
+    # Bug 4 fix: extract JTI from the bearer token and blacklist it in Redis
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header.removeprefix("Bearer ").strip()
+
+    payload = verify_token(token)
+    if payload:
+        jti = payload.get("jti")
+        exp = payload.get("exp")
+        if jti and exp:
+            # TTL = remaining lifetime of the token (at minimum 1 second)
+            now = int(datetime.now(timezone.utc).timestamp())
+            ttl = max(exp - now, 1)
+            await redis.set(f"blacklist:{jti}", "1", ex=ttl)
+
     return {"message": "Successfully logged out"}
 
 

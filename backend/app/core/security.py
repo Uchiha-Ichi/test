@@ -26,7 +26,7 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
         expire = datetime.now(timezone.utc) + timedelta(
             minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
         )
-    to_encode.update({"exp": expire, "type": "access"})
+    to_encode.update({"exp": expire, "type": "access", "jti": str(uuid.uuid4())})
     encoded_jwt = jwt.encode(
         to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM
     )
@@ -47,13 +47,12 @@ def create_refresh_token(data: dict, expires_delta: timedelta | None = None) -> 
 
 
 def verify_token(token: str) -> dict[str, Any] | None:
-    """Verify and decode a JWT token."""
+    """Verify and decode a JWT token, enforcing expiry."""
     try:
         payload = jwt.decode(
             token,
             settings.JWT_SECRET,
             algorithms=[settings.JWT_ALGORITHM],
-            options={"verify_exp": False},
         )
         return payload
     except JWTError:

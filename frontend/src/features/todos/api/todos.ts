@@ -31,10 +31,11 @@ interface UpdateTodoRequest {
   completed?: boolean;
 }
 
-
+// Bug 14 fix: include page and size in the query key so changing pagination
+// triggers a new fetch instead of returning stale cached data.
 export function useTodos(page: number = 1, size: number = 10000) {
   return useQuery({
-    queryKey: ["todos"],
+    queryKey: ["todos", page, size],
     queryFn: async (): Promise<TodoListResponse> => {
       const response = await api.get("/todos", {
         params: { page, size },
@@ -92,7 +93,11 @@ export function useUpdateTodo() {
 
       return { previousTodos };
     },
-    onError: () => {
+    // Bug 15 fix: restore previous data from context when a mutation fails
+    onError: (_err, _variables, context) => {
+      if (context?.previousTodos) {
+        queryClient.setQueryData<TodoListResponse>(["todos"], context.previousTodos);
+      }
       toast.error("Failed to update todo");
     },
     onSettled: () => {

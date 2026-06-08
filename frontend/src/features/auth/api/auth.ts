@@ -1,5 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { queryClient } from "@/lib/queryClient";
 
 interface LoginRequest {
   email: string;
@@ -51,6 +52,9 @@ export function useLogout() {
     onSuccess: () => {
       localStorage.removeItem("access_token");
       localStorage.removeItem("refresh_token");
+      // Bug 13 fix: clear ALL React Query cached data to prevent
+      // a subsequent user from seeing the previous user's data
+      queryClient.clear();
     },
   });
 }

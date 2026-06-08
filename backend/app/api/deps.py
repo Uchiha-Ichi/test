@@ -13,9 +13,14 @@ from app.services.auth_service import get_user_by_id
 security_scheme = HTTPBearer()
 
 
+def get_redis():
+    return redis_client
+
+
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security_scheme),
     db: AsyncSession = Depends(get_db),
+    redis = Depends(get_redis),
 ) -> User:
     token = credentials.credentials
     payload = verify_token(token)
@@ -24,6 +29,13 @@ async def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication token",
+        )
+
+    # Bug 2 fix: ensure this is an access token, not a refresh token
+    if payload.get("type") != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token type",
         )
 
     user_id = payload.get("sub")
@@ -41,6 +53,16 @@ async def get_current_user(
             detail="Invalid user ID in token",
         )
 
+    # Bug 4 fix: check if token JTI has been blacklisted (logged out)
+    jti = payload.get("jti")
+    if jti:
+        blacklisted = await redis.get(f"blacklist:{jti}")
+        if blacklisted:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token has been revoked",
+            )
+
     user = await get_user_by_id(db, user_uuid)
     if user is None:
         raise HTTPException(
@@ -50,6 +72,3 @@ async def get_current_user(
 
     return user
 
-
-def get_redis():
-    return redis_client

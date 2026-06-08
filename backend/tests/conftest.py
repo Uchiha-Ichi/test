@@ -51,12 +51,38 @@ async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 
+class FakeRedis:
+    def __init__(self):
+        self.store = {}
+    async def get(self, key: str) -> str | None:
+        return self.store.get(key)
+    async def set(self, key: str, value: str, ex: int | None = None):
+        self.store[key] = value
+    async def delete(self, *keys: str):
+        for k in keys:
+            self.store.pop(k, None)
+    async def scan(self, cursor: int, match: str | None = None, count: int | None = None):
+        import fnmatch
+        keys = list(self.store.keys())
+        if match:
+            matched = [k for k in keys if fnmatch.fnmatch(k, match)]
+        else:
+            matched = keys
+        return 0, matched
+    async def exists(self, key: str) -> bool:
+        return key in self.store
+
+fake_redis = FakeRedis()
+
+
+@pytest.fixture(autouse=True)
+def clear_redis():
+    fake_redis.store.clear()
+    yield
+
+
 def override_get_redis():
-    mock_redis = MagicMock()
-    mock_redis.get = AsyncMock(return_value=None)
-    mock_redis.set = AsyncMock()
-    mock_redis.delete = AsyncMock()
-    return mock_redis
+    return fake_redis
 
 
 app.dependency_overrides[get_db] = override_get_db

@@ -39,7 +39,7 @@ export function TodoList({ todos }: TodoListProps) {
       <div className="space-y-2">
         {todos.map((todo, index) => (
           <TodoItem
-            key={index}
+            key={todo.id}
             todo={todo}
             index={index}
             onToggle={handleToggle}
